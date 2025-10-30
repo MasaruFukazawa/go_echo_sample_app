@@ -87,8 +87,8 @@ jobs:
       - name: Deploy to Amazon ECS via CodeDeploy
         id: deploy
         run: |
-          # appspec.yaml の内容を base64 エンコード
-          APPSPEC_CONTENT=$(cat appspec-updated.yaml | base64 -w 0)
+          # appspec.yaml の内容を jq でエスケープして JSON を生成
+          APPSPEC_CONTENT=$(cat appspec-updated.yaml | jq -Rs .)
 
           # JSON ペイロードを作成
           cat > deployment.json <<EOF
@@ -98,7 +98,7 @@ jobs:
             "revision": {
               "revisionType": "AppSpecContent",
               "appSpecContent": {
-                "content": "$(cat appspec-updated.yaml)"
+                "content": $APPSPEC_CONTENT
               }
             }
           }
