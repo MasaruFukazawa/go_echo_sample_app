@@ -9,6 +9,9 @@ env:
   AWS_REGION: ap-northeast-1
   ECR_APP_REPOSITORY: go_echo_sample_app/app
   ECR_NGINX_REPOSITORY: go_echo_sample_app/nginx
+  ECS_CLUSTER: go-echo-sample-dev-cluster
+  ECS_SERVICE: go-echo-sample-dev-service
+  ECS_TASK_DEFINITION: task-definition.json
 
 jobs:
   build:
@@ -48,3 +51,26 @@ jobs:
           docker tag $ECR_REGISTRY/$ECR_NGINX_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_NGINX_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_NGINX_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_NGINX_REPOSITORY:latest
+
+      - name: Update task definition
+        id: task-def
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          EXECUTION_ROLE_ARN: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
+        run: |
+          # タスク定義のイメージURIとロールARNを置換
+          sed -e "s|APP_IMAGE|$ECR_REGISTRY/$ECR_APP_REPOSITORY:$IMAGE_TAG|g" \
+              -e "s|NGINX_IMAGE|$ECR_REGISTRY/$ECR_NGINX_REPOSITORY:$IMAGE_TAG|g" \
+              -e "s|EXECUTION_ROLE_ARN|$EXECUTION_ROLE_ARN|g" \
+              ${{ env.ECS_TASK_DEFINITION }} > task-definition-updated.json
+
+          echo "task-definition-file=task-definition-updated.json" >> $GITHUB_OUTPUT
+
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition-file }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
