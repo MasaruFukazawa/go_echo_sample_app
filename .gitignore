@@ -30,3 +30,12 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Air - Live reload for Go
+tmp/
+
+# macOS
+.DS_Store
+
+# Log files
+*.log
