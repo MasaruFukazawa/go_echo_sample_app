@@ -87,10 +87,24 @@ jobs:
       - name: Deploy to Amazon ECS via CodeDeploy
         id: deploy
         run: |
-          DEPLOYMENT_ID=$(aws deploy create-deployment \
-            --application-name ${{ env.CODEDEPLOY_APP }} \
-            --deployment-group-name ${{ env.CODEDEPLOY_GROUP }} \
-            --revision revisionType=AppSpecContent,appSpecContent={content="$(cat appspec-updated.yaml)"} \
+          # appspec.yaml の内容を base64 エンコード
+          APPSPEC_CONTENT=$(cat appspec-updated.yaml | base64 -w 0)
+
+          # JSON ペイロードを作成
+          cat > deployment.json <<EOF
+          {
+            "applicationName": "${{ env.CODEDEPLOY_APP }}",
+            "deploymentGroupName": "${{ env.CODEDEPLOY_GROUP }}",
+            "revision": {
+              "revisionType": "AppSpecContent",
+              "appSpecContent": {
+                "content": "$(cat appspec-updated.yaml)"
+              }
+            }
+          }
+          EOF
+
+          DEPLOYMENT_ID=$(aws deploy create-deployment --cli-input-json file://deployment.json \
             --query 'deploymentId' \
             --output text)
           echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
