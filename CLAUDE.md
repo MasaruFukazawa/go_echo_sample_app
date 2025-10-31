@@ -75,15 +75,45 @@ go run main.go
   - `Dockerfile` - 本番 nginx イメージ
   - `nginx.conf` - プロキシ設定（localhost:8080 → ポート 80）
 
-### CI/CD
+### CI/CD - CodeDeploy Blue/Green デプロイ
 
-GitHub Actions ワークフロー（`.github/workflows/build.yml`）が main ブランチへの push 時に両方のイメージを自動ビルドして ECR にプッシュします：
+GitHub Actions ワークフロー（`.github/workflows/build.yml`）が main ブランチへの push 時に自動的に ECR プッシュから ECS デプロイまで実行します：
 
-- **ECR リポジトリ**:
-  - `821975976774.dkr.ecr.ap-northeast-1.amazonaws.com/go_echo_sample_app/app`
-  - `821975976774.dkr.ecr.ap-northeast-1.amazonaws.com/go_echo_sample_app/nginx`
-- **タグ**: `latest` とコミット SHA の両方のタグでプッシュ
-- **認証**: GitHub Secrets の AWS アクセスキー認証情報を使用
+**デプロイフロー:**
+1. app と nginx イメージを ECR にプッシュ（コミット SHA と latest タグ）
+2. ECS タスク定義を登録（`task-definition.json`）
+3. appspec.yaml にタスク定義 ARN を注入
+4. CodeDeploy で Blue/Green デプロイを実行
+5. デプロイ完了を待機
+
+**ECR リポジトリ:**
+- `821975976774.dkr.ecr.ap-northeast-1.amazonaws.com/go_echo_sample_app/app`
+- `821975976774.dkr.ecr.ap-northeast-1.amazonaws.com/go_echo_sample_app/nginx`
+
+**ECS 設定:**
+- クラスター: `go-echo-sample-dev-cluster`
+- サービス: `go-echo-sample-dev-service`
+- タスク定義: `go-echo-sample` (family名)
+- デプロイコントローラー: `CODE_DEPLOY`
+
+**CodeDeploy 設定:**
+- アプリケーション: `go-echo-sample-dev-app`
+- デプロイメントグループ: `go-echo-sample-dev-dg`
+- デプロイ設定: `CodeDeployDefault.ECSAllAtOnce`
+- 自動ロールバック: 有効（デプロイ失敗時）
+- Blue 終了待機時間: 5分
+
+**GitHub Secrets（必須）:**
+- `AWS_ACCESS_KEY_ID`: AWS アクセスキー ID
+- `AWS_SECRET_ACCESS_KEY`: AWS シークレットアクセスキー
+- `ECS_EXECUTION_ROLE_ARN`: ECS タスク実行ロール ARN
+
+**必要な IAM 権限:**
+GitHub Actions 用の IAM ユーザー（`GoEchoSampleAppGithubUser`）には以下の権限が必要：
+- ECR: プッシュ権限
+- ECS: タスク定義登録、サービス更新
+- CodeDeploy: デプロイ作成、デプロイ取得
+- IAM: PassRole（ECS タスクロール用）
 
 ### 重要な設定ポイント
 
@@ -91,3 +121,41 @@ GitHub Actions ワークフロー（`.github/workflows/build.yml`）が main ブ
 2. **ホットリロード**: 開発環境ではファイル変更時の自動再コンパイルに `air` を使用
 3. **本番バイナリ**: 静的リンク用に `CGO_ENABLED=0` でビルド（依存関係なし）
 4. **ネットワーク名前空間の共有**: nginx と app 間の localhost 通信に必須
+5. **コンテナ名の一致**: task-definition.json と appspec.yaml のコンテナ名（"nginx"）は、Terraform の `container_name` と一致させる必要がある
+
+## トラブルシューティング
+
+### ECR 接続エラー（ResourceInitializationError）
+**症状:** タスクが ECR からイメージを取得できない（タイムアウト）
+
+**原因:** Private サブネットから ECR への接続経路がない
+
+**解決方法:**
+1. **VPC エンドポイントを追加（推奨）**
+   - `com.amazonaws.ap-northeast-1.ecr.api` (Interface)
+   - `com.amazonaws.ap-northeast-1.ecr.dkr` (Interface)
+   - `com.amazonaws.ap-northeast-1.s3` (Gateway)
+2. **NAT Gateway 経由でインターネット接続**
+   - Private サブネットに NAT Gateway を設置
+
+### ALB ヘルスチェック 404 エラー
+**症状:** ターゲットグループのヘルスチェックが 404 で失敗
+
+**原因:** ALB のヘルスチェックパスがアプリケーションに存在しない
+
+**解決方法:**
+1. Terraform のターゲットグループでヘルスチェックパスを `/` に設定
+2. または、main.go に `/health` エンドポイントを追加してヘルスチェックパスを `/health` に設定
+
+### タスク定義のコンテナ構成
+**2つのコンテナ:**
+- `app`: Go Echo アプリケーション（ポート 8080、CPU: 128、メモリ: 256MB）
+- `nginx`: リバースプロキシ（ポート 80、CPU: 128、メモリ: 256MB）
+
+**依存関係:**
+- nginx は app が HEALTHY になってから起動
+- 両方のコンテナにヘルスチェック設定（wget コマンド使用）
+
+**ログ:**
+- app: `/ecs/go-echo-sample-dev/app`
+- nginx: `/ecs/go-echo-sample-dev/nginx`
